@@ -108,7 +108,9 @@ What to expect:
          - /dev/dri:/dev/dri
        # group_add: ["107"]   # only if you get "permission denied": the CT's render group id
    ```
-4. **Check:** `docker exec batch-media-compressor vainfo` should list `VAProfileH264…` and `VAProfileHEVCMain` with `VAEntrypointEncSlice`. The app's own self-test result is shown under the video settings.
+4. **Check:** `docker exec batch-media-compressor vainfo` should list `VAProfileH264…` and `VAProfileHEVCMain` with an `EncSlice` (or `EncSliceLP`) entry. A profile that only shows `VAEntrypointVLD` can decode but not encode. The app's own self-test result is shown under the video settings, including the reason if an encoder fails.
+
+The image uses Debian's `intel-media-va-driver-non-free`. It's redistributable but not open source. The free build of the driver can't encode HEVC on this generation of GPU (it only offers H.264 low-power encoding), so the non-free one is needed for the H.265 preset to work.
 
 Don't add the `devices:` line on a machine without `/dev/dri`: Docker refuses to start the container.
 

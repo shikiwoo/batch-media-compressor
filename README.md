@@ -45,6 +45,7 @@ Each media type has its own preset, grouped by how much quality you're willing t
 - **Lossless**: the decoded result is bit-for-bit (audio) or pixel-for-pixel (images) identical.
 - **Visually lossless**: technically lossy, but tuned so you can't tell it apart from the source.
 - **Lossy**: much smaller files, and you may see or hear quality loss at aggressive settings.
+- **Intel GPU**: lossy, encoded on the Intel iGPU. Very fast, but bigger files than the software encoders at the same quality. See [Hardware encoding](#hardware-encoding-intel-gpu).
 
 | Type | Preset | Category | Quality setting | Notes |
 |---|---|---|---|---|
@@ -54,6 +55,8 @@ Each media type has its own preset, grouped by how much quality you're willing t
 | Video | **H.265 / HEVC — small** | Lossy | CRF 28 + max resolution | Big savings for archiving or sharing. |
 | Video | **AV1 — small** | Lossy | CRF 35 + max resolution | Smallest video files. Slow to encode. |
 | Video | **H.264 — max compatibility** | Lossy | CRF 23 + max resolution | Plays on everything, including old TVs. |
+| Video | **H.265 — Intel GPU (fast)** | Intel GPU | QP 24 + max resolution | Needs the GPU passed through. Many times faster than software. |
+| Video | **H.264 — Intel GPU (fast)** | Intel GPU | QP 22 + max resolution | Needs the GPU passed through. Plays everywhere, biggest files. |
 | Audio | **FLAC** (default) | Lossless | – | WAV/AIFF/APE/WavPack → FLAC. |
 | Audio | **Opus** | Lossy | 128 kbps | Best quality per MB. |
 | Audio | **AAC (.m4a)** | Lossy | 192 kbps | Native on Apple devices. |
@@ -74,8 +77,52 @@ Lossy image presets drop EXIF metadata (camera, date, GPS). Photos are rotated u
 Safety features:
 - **Audio tracks, subtitles, chapters and metadata are stream-copied**, bit-for-bit. Only the video stream is re-encoded.
 - If a compressed file **isn't smaller** than the original, the original is copied to the output instead ("Kept original").
-- Encoding writes to a hidden `.name.partial.ext` file first. It is renamed only when ffmpeg finishes cleanly, so cancelled or failed jobs never leave half-written files.
+- Encoding writes to a hidden `.name.partial.ext` file first. It is renamed only when ffmpeg finishes cleanly, so cancelled or failed jobs never leave half-written files. Leftovers from a crash are deleted on the next start.
 - The original modification time is kept on the output file.
+
+## Hardware encoding (Intel GPU)
+
+The GPU presets use VAAPI (Intel Quick Sync) to encode on the iGPU, so a 4K file that takes ages in software finishes in a fraction of the time and barely loads the CPU.
+
+What to expect:
+- **Speed over size.** At the same visual quality, GPU encodes are noticeably bigger than `H.265 — small` (software x265). Use the software presets for archiving. Use the GPU ones when you want it done fast.
+- **Codecs.** H.264 and H.265 only. Intel UHD 630 (i5-10500 and other 10th gen CPUs) cannot encode AV1, so the AV1 presets always run on the CPU.
+- **8-bit output.** 10-bit sources are converted to 8-bit. **HDR** sources are skipped with a message, because converting them would wash out the colours.
+- **Decoding stays on the CPU.** Only encoding is offloaded, which works for every source format and is rarely the bottleneck.
+- **Self-test at startup.** The app tries a tiny GPU encode when it starts. If the GPU can't be used, the GPU presets are greyed out and the reason is shown under the video settings, so you find out before queueing 500 files.
+
+### Giving the container the GPU
+
+1. **Host:** check that `ls /dev/dri` shows `renderD128` (the iGPU must be enabled in the BIOS).
+2. **Proxmox CT:** in Proxmox 8.1+, open the CT → **Resources → Add → Device Passthrough**, set the path to `/dev/dri/renderD128` and the GID to the CT's `render` group (`getent group render` inside the CT). On older versions, add to `/etc/pve/lxc/<id>.conf`:
+   ```
+   lxc.cgroup2.devices.allow: c 226:* rwm
+   lxc.mount.entry: /dev/dri dev/dri none bind,optional,create=dir
+   ```
+   Restart the CT and check `ls -l /dev/dri` inside it.
+3. **Compose / Portainer:** pass the device into the container:
+   ```yaml
+   services:
+     compressor:
+       devices:
+         - /dev/dri:/dev/dri
+       # group_add: ["107"]   # only if you get "permission denied": the CT's render group id
+   ```
+4. **Check:** `docker exec batch-media-compressor vainfo` should list `VAProfileH264…` and `VAProfileHEVCMain` with `VAEntrypointEncSlice`. The app's own self-test result is shown under the video settings.
+
+Don't add the `devices:` line on a machine without `/dev/dri`: Docker refuses to start the container.
+
+## Resume after a restart
+
+The queue is saved to `state.json` (default `/output/.compressor/`) whenever it changes. When the app starts, it reads the file and carries on:
+
+- **Finished files stay finished.** Their results stay in the list and they are never redone.
+- **Queued files are re-queued** automatically, in the same order.
+- **A file that was halfway through starts again from 0%.** ffmpeg can't continue a half-finished encode. Its leftover `.partial` file is deleted first.
+- **A clean stop** (`docker stop`, a Portainer redeploy) puts the running file back in the queue and deletes its partial file right away.
+- **Crash-loop guard.** If the same file has been started 3 times without ever finishing, for example because it runs the container out of memory, it is marked *failed* instead of retrying forever.
+
+Set `AUTO_RESUME=0` to start with an empty queue every time. The state file lives in the output folder, so it also survives the container being recreated.
 
 ## Configuration
 
@@ -84,6 +131,9 @@ Safety features:
 | `INPUT_DIR` | `/input` | Where to look for media |
 | `OUTPUT_DIR` | `/output` | Where compressed files go |
 | `CONCURRENCY` | `1` | Files encoded at the same time. x265 and AV1 already use all CPU cores, so 1 is usually fastest overall. |
+| `STATE_DIR` | `$OUTPUT_DIR/.compressor` | Where the saved queue lives |
+| `AUTO_RESUME` | `1` | Re-queue unfinished files on startup. `0` = start empty. |
+| `VAAPI_DEVICE` | `/dev/dri/renderD128` | The GPU device used by the Intel GPU presets |
 
 Output files are owned by root unless you set `user: "UID:GID"` in `docker-compose.yml` (see the commented line).
 
@@ -96,13 +146,14 @@ There is **no login**. Don't expose port 8080 to the internet. Keep it on your L
 ```
 app/
   main.py      FastAPI routes: list files, start/cancel jobs, serve the UI
-  jobs.py      job queue + worker(s) that run ffmpeg and parse progress
+  jobs.py      job queue + worker(s) that run ffmpeg, parse progress, save/restore the queue
+  hw.py        GPU self-test at startup (which hardware encoders actually work)
   presets.py   preset definitions → ffmpeg arguments
   static/      the web UI (plain HTML/CSS/JS, no build step)
 ```
 
 - **Progress:** ffmpeg runs with `-progress pipe:1`, which prints lines like `out_time_us=5000000` and `speed=1.2x` several times a second. The worker reads them and divides by the file's duration (from `ffprobe`) to get a percentage and ETA. The browser polls `GET /api/jobs` every second and redraws.
-- **Queue:** an `asyncio.Queue` with `CONCURRENCY` worker tasks. Cancel sends SIGTERM to that job's ffmpeg process.
+- **Queue:** an `asyncio.Queue` with `CONCURRENCY` worker tasks. Cancel sends SIGTERM to that job's ffmpeg process. Every change is also written to `state.json` (atomically: written to a temp file, then renamed), which is what makes resume possible.
 - **Overall progress** is weighted by file size, so a 10 GB video counts more than a 100 KB image.
 
 ### Running without Docker (for development)

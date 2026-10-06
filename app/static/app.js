@@ -39,37 +39,78 @@ const presetById = (id) => KINDS.flatMap((k) => config.presets[k]).find((p) => p
 
 // ---------- settings ----------
 
+const CATEGORY = {
+  lossless: { group: "Lossless — bit-exact", badge: "lossless" },
+  visual: { group: "Visually lossless — looks identical", badge: "visually lossless" },
+  lossy: { group: "Lossy — much smaller, some quality loss", badge: "lossy" },
+};
+
+// localStorage can throw (private mode, blocked storage) — settings memory is just a convenience
+const store = {
+  get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
+  set: (k, v) => { try { localStorage.setItem(k, v); } catch {} },
+};
+
 function setupSettings() {
   $("#input-dir").textContent = config.input_dir;
   $("#output-dir").textContent = config.output_dir;
 
   for (const kind of KINDS) {
     const sel = $(`#${kind}-preset`);
+    // one <optgroup> per category, so lossless and lossy presets are clearly separated
     sel.innerHTML =
-      config.presets[kind].map((p) => `<option value="${p.id}">${esc(p.label)}</option>`).join("") +
+      Object.entries(CATEGORY).map(([cat, { group }]) => {
+        const opts = config.presets[kind].filter((p) => p.category === cat);
+        return opts.length
+          ? `<optgroup label="${group}">${opts.map((p) => `<option value="${p.id}">${esc(p.label)}</option>`).join("")}</optgroup>`
+          : "";
+      }).join("") +
       `<option value="">Don't touch ${kind === "image" ? "images" : kind + " files"}</option>`;
-    const saved = localStorage.getItem(`preset-${kind}`);
+    const saved = store.get(`preset-${kind}`);
     if (saved !== null && [...sel.options].some((o) => o.value === saved)) sel.value = saved;
-    sel.addEventListener("change", () => { localStorage.setItem(`preset-${kind}`, sel.value); updateHints(); });
+    sel.addEventListener("change", () => { store.set(`preset-${kind}`, sel.value); updateKind(kind); });
+
+    const slider = $(`#${kind}-quality`);
+    slider.addEventListener("input", () => {
+      store.set(`quality-${sel.value}`, slider.value);  // remembered per preset
+      showQualityValue(kind);
+    });
+    updateKind(kind);
   }
 
-  const crf = $("#crf");
-  crf.addEventListener("input", () => { $("#crf-value").textContent = crf.value; });
-  updateHints();
+  const mh = $("#max-height");
+  mh.innerHTML = `<option value="">Keep original</option>` +
+    config.max_heights.map((h) => `<option value="${h}">${h === 2160 ? "4K (2160p)" : h + "p"}</option>`).join("");
+  mh.value = store.get("max-height") ?? "";
+  mh.addEventListener("change", () => store.set("max-height", mh.value));
 }
 
-function updateHints() {
-  for (const kind of KINDS) {
-    const p = presetById($(`#${kind}-preset`).value);
-    $(`#${kind}-hint`).textContent = p ? p.description : "Files of this type will be ignored.";
+// show/hide the quality slider + resolution picker to match the chosen preset
+function updateKind(kind) {
+  const p = presetById($(`#${kind}-preset`).value);
+  $(`#${kind}-hint`).textContent = p ? p.description : "Files of this type will be ignored.";
+  const badge = $(`#${kind}-cat`);
+  badge.textContent = p ? CATEGORY[p.category].badge : "";
+  badge.className = `cat-badge ${p ? p.category : ""}`;
+
+  const q = p && p.quality;
+  $(`#${kind}-quality-row`).hidden = !q;
+  if (q) {
+    const slider = $(`#${kind}-quality`);
+    Object.assign(slider, { min: q.min, max: q.max, step: q.step });
+    const saved = Number(store.get(`quality-${p.id}`));
+    slider.value = saved >= q.min && saved <= q.max ? saved : q.default;
+    $(`#${kind}-quality-label`).textContent = q.label;
+    $(`#${kind}-quality-hint`).textContent = q.hint;
+    showQualityValue(kind);
   }
-  // only show the CRF slider for presets that use it, and reset it to that preset's default
-  const vp = presetById($("#video-preset").value);
-  $("#crf-row").hidden = !(vp && vp.uses_crf);
-  if (vp && vp.uses_crf) {
-    $("#crf").value = vp.default_crf;
-    $("#crf-value").textContent = vp.default_crf;
-  }
+  if (kind === "video") $("#video-scale-row").hidden = !(p && p.scalable);
+}
+
+function showQualityValue(kind) {
+  const q = presetById($(`#${kind}-preset`).value).quality;
+  const v = Number($(`#${kind}-quality`).value);
+  $(`#${kind}-quality-value`).textContent = `${v}${q.unit ? " " + q.unit : ""}${v === q.default ? " (default)" : ""}`;
 }
 
 // ---------- file list ----------
@@ -129,18 +170,14 @@ function setupFileEvents() {
     const btn = $("#start");
     btn.disabled = true;
     try {
-      const vp = presetById($("#video-preset").value);
-      const res = await api("/api/jobs", {
-        method: "POST",
-        body: JSON.stringify({
-          files: [...selected],
-          video_preset: $("#video-preset").value || null,
-          audio_preset: $("#audio-preset").value || null,
-          image_preset: $("#image-preset").value || null,
-          crf: vp && vp.uses_crf ? Number($("#crf").value) : null,
-          skip_existing: $("#skip-existing").checked,
-        }),
-      });
+      const body = { files: [...selected], skip_existing: $("#skip-existing").checked };
+      for (const kind of KINDS) {
+        const p = presetById($(`#${kind}-preset`).value);
+        body[`${kind}_preset`] = p ? p.id : null;
+        body[`${kind}_quality`] = p && p.quality ? Number($(`#${kind}-quality`).value) : null;
+      }
+      body.max_height = Number($("#max-height").value) || null;
+      const res = await api("/api/jobs", { method: "POST", body: JSON.stringify(body) });
       if (res.added === 0) alert("Nothing queued — all selected file types are set to \"Don't touch\".");
       selected.clear();
       renderFiles();
@@ -188,7 +225,7 @@ function renderJobs({ jobs, summary }) {
       <tr>
         <td class="path">
           ${esc(j.src)}
-          <div class="kind">${esc(preset ? preset.label : j.preset)}${j.crf != null ? ` · CRF ${j.crf}` : ""}</div>
+          <div class="kind">${esc(jobSettings(j, preset))}</div>
           ${j.message ? `<div class="${msgClass}">${esc(j.message)}</div>` : ""}
         </td>
         <td><span class="badge ${j.status}">${STATUS_LABEL[j.status] || j.status}</span></td>
@@ -219,6 +256,18 @@ function renderJobs({ jobs, summary }) {
       : "",
   ];
   $("#stats").innerHTML = parts.filter(Boolean).join("");
+}
+
+// "H.265 / HEVC — small · CRF 28 · ≤720p"
+function jobSettings(j, preset) {
+  if (!preset) return j.preset;
+  const parts = [preset.label];
+  if (j.quality != null && preset.quality) {
+    const q = preset.quality;
+    parts.push(q.unit ? `${j.quality} ${q.unit}` : `${q.label} ${j.quality}`);
+  }
+  if (j.max_height) parts.push(`≤${j.max_height}p`);
+  return parts.join(" · ");
 }
 
 let pollTimer = null;

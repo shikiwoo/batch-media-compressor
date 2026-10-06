@@ -1,6 +1,6 @@
 # Batch Media Compressor
 
-A small web app that batch-compresses videos, audio and images with **ffmpeg** without visible quality loss. It runs as a Docker container and shows live progress for each file, with speed and ETA.
+A small web app that batch-compresses videos, audio and images with **ffmpeg**, either without visible quality loss or, if you want, lossy for much smaller files. It runs as a Docker container and shows live progress for each file, with speed and ETA.
 
 ## Quick start
 
@@ -38,18 +38,38 @@ GitHub Actions (`.github/workflows/docker.yml`) builds the image for `linux/amd6
 | Push a tag `v1.2.0` | `1.2.0`, `1.2`, `sha-<commit>` |
 | Pull request | builds only, nothing pushed |
 
-## Presets: what "without losing quality" means here
+## Presets
 
-| Type | Preset | Lossless? | Notes |
-|---|---|---|---|
-| Video | **H.265 / HEVC** (default, CRF 20) | Visually lossless | Best all-rounder. Usually 30–60% smaller. Plays almost everywhere. |
-| Video | **AV1 (SVT-AV1)** (CRF 24) | Visually lossless | Smallest files. Slower to encode and needs newer players. |
-| Video | **H.264 lossless** | Bit-exact | Only helps with raw or intermediate sources (screen recordings, ProRes). Normal videos get bigger. |
-| Audio | **FLAC** | Bit-exact | WAV/AIFF/APE/WavPack → FLAC. |
-| Image | **WebP lossless** | Pixel-exact (8-bit) | PNG/BMP/TIFF → WebP. Use PNG re-compress for 16-bit images. |
-| Image | **PNG re-compress** | Pixel-exact | Keeps PNG format and bit depth. |
+Each media type has its own preset, grouped by how much quality you're willing to trade:
 
-Truly lossless video compression can't shrink a file that is already compressed, such as a normal H.264 MP4. The math doesn't allow it. That's why the video presets are *visually* lossless: the CRF slider sets the quality, and around 18–22 for HEVC you can't tell the result apart from the source. Lower CRF means better quality and a bigger file.
+- **Lossless**: the decoded result is bit-for-bit (audio) or pixel-for-pixel (images) identical.
+- **Visually lossless**: technically lossy, but tuned so you can't tell it apart from the source.
+- **Lossy**: much smaller files, and you may see or hear quality loss at aggressive settings.
+
+| Type | Preset | Category | Quality setting | Notes |
+|---|---|---|---|---|
+| Video | **H.265 / HEVC** (default) | Visually lossless | CRF 20 | Best all-rounder. Usually 30–60% smaller. Plays almost everywhere. |
+| Video | **AV1 (SVT-AV1)** | Visually lossless | CRF 24 | Smaller still. Slower to encode and needs newer players. |
+| Video | **H.264 lossless** | Lossless | – | Only helps with raw or intermediate sources (screen recordings, ProRes). Normal videos get bigger. |
+| Video | **H.265 / HEVC — small** | Lossy | CRF 28 + max resolution | Big savings for archiving or sharing. |
+| Video | **AV1 — small** | Lossy | CRF 35 + max resolution | Smallest video files. Slow to encode. |
+| Video | **H.264 — max compatibility** | Lossy | CRF 23 + max resolution | Plays on everything, including old TVs. |
+| Audio | **FLAC** (default) | Lossless | – | WAV/AIFF/APE/WavPack → FLAC. |
+| Audio | **Opus** | Lossy | 128 kbps | Best quality per MB. |
+| Audio | **AAC (.m4a)** | Lossy | 192 kbps | Native on Apple devices. |
+| Audio | **MP3** | Lossy | 192 kbps | Plays on anything. |
+| Image | **WebP lossless** (default) | Lossless | – | PNG/BMP/TIFF → WebP. Pixel-exact for 8-bit images. |
+| Image | **PNG re-compress** | Lossless | – | Keeps PNG format and bit depth. |
+| Image | **WebP lossy** | Lossy | 80 | ~30% smaller than JPEG, keeps transparency. |
+| Image | **JPEG** | Lossy | 85 | Opens anywhere. Transparency is flattened. |
+
+Truly lossless video compression can't shrink a file that is already compressed, such as a normal H.264 MP4. The math doesn't allow it. That's why the default video presets are *visually* lossless. For video, the quality setting is CRF: **lower CRF = better quality and a bigger file**. For audio it's the bitrate, and for images it's 1–100.
+
+**Max resolution** (lossy video presets only) caps the *short* side of the video. "1080p" turns 4K landscape into 1920×1080 and 4K portrait into 1080×1920. It never upscales.
+
+Lossless audio and image presets only run on lossless sources. Converting an MP3 to FLAC, or a JPEG to lossless WebP, can't bring back lost quality and only makes the file bigger, so those files are marked *skipped* with a reason. The lossy presets accept everything, including MP3/M4A/OGG and JPEG/WebP inputs.
+
+Lossy image presets drop EXIF metadata (camera, date, GPS). Photos are rotated upright first, so they don't end up sideways.
 
 Safety features:
 - **Audio tracks, subtitles, chapters and metadata are stream-copied**, bit-for-bit. Only the video stream is re-encoded.

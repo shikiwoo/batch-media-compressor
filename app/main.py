@@ -1,3 +1,4 @@
+import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -7,20 +8,31 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from . import hw
 from .jobs import JobManager
 from .presets import MAX_HEIGHTS, PRESETS, kind_of, presets_for
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s:     %(message)s")
 
 INPUT_DIR = Path(os.environ.get("INPUT_DIR", "/input")).resolve()
 OUTPUT_DIR = Path(os.environ.get("OUTPUT_DIR", "/output")).resolve()
 CONCURRENCY = max(1, int(os.environ.get("CONCURRENCY", "1")))
+# where the queue is saved so it survives restarts (kept next to the outputs, so it
+# also survives the container being recreated, e.g. a stack redeploy in Portainer)
+STATE_DIR = Path(os.environ.get("STATE_DIR", str(OUTPUT_DIR / ".compressor"))).resolve()
+RESUME = os.environ.get("AUTO_RESUME", "1").lower() not in ("0", "false", "no")
 STATIC = Path(__file__).parent / "static"
 
-manager = JobManager(INPUT_DIR, OUTPUT_DIR, CONCURRENCY)
+manager = JobManager(INPUT_DIR, OUTPUT_DIR, CONCURRENCY, STATE_DIR)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    await hw.detect()  # ~1 second: tries a tiny GPU encode so the UI knows what works
+    manager.remove_stale_partials()
+    if RESUME:
+        manager.load()
     manager.start()
     yield
     await manager.stop()
@@ -45,6 +57,8 @@ def config():
         "concurrency": CONCURRENCY,
         "presets": {kind: [p.public() for p in presets_for(kind)] for kind in ("video", "audio", "image")},
         "max_heights": MAX_HEIGHTS,
+        "hardware": hw.HW.public(),
+        "auto_resume": RESUME,
     }
 
 
@@ -82,7 +96,7 @@ class StartRequest(BaseModel):
 
 
 @app.post("/api/jobs")
-def start_jobs(req: StartRequest):
+async def start_jobs(req: StartRequest):
     chosen = {"video": req.video_preset, "audio": req.audio_preset, "image": req.image_preset}
     qualities = {"video": req.video_quality, "audio": req.audio_quality, "image": req.image_quality}
     for kind, pid in chosen.items():
@@ -90,6 +104,8 @@ def start_jobs(req: StartRequest):
             continue
         if pid not in PRESETS or PRESETS[pid].kind != kind:
             raise HTTPException(400, f"Unknown {kind} preset: {pid}")
+        if not PRESETS[pid].available:
+            raise HTTPException(400, f"{PRESETS[pid].label} isn't available: {PRESETS[pid].unavailable_reason}")
         q, spec = qualities[kind], PRESETS[pid].quality
         if q is not None and spec and not spec.min <= q <= spec.max:
             raise HTTPException(400, f"{kind} {spec.label} must be between {spec.min} and {spec.max}")
@@ -118,20 +134,20 @@ def get_jobs():
 
 
 @app.post("/api/jobs/{job_id}/cancel")
-def cancel_job(job_id: int):
+async def cancel_job(job_id: int):
     manager.cancel(job_id)
     return {"ok": True}
 
 
 @app.post("/api/jobs/cancel-all")
-def cancel_all():
+async def cancel_all():
     for job_id in list(manager.jobs):
         manager.cancel(job_id)
     return {"ok": True}
 
 
 @app.post("/api/jobs/clear")
-def clear_finished():
+async def clear_finished():
     manager.clear_finished()
     return {"ok": True}
 

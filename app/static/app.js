@@ -43,6 +43,7 @@ const CATEGORY = {
   lossless: { group: "Lossless — bit-exact", badge: "lossless" },
   visual: { group: "Visually lossless — looks identical", badge: "visually lossless" },
   lossy: { group: "Lossy — much smaller, some quality loss", badge: "lossy" },
+  hardware: { group: "Intel GPU — very fast, bigger files", badge: "GPU · lossy" },
 };
 
 // localStorage can throw (private mode, blocked storage) — settings memory is just a convenience
@@ -62,12 +63,13 @@ function setupSettings() {
       Object.entries(CATEGORY).map(([cat, { group }]) => {
         const opts = config.presets[kind].filter((p) => p.category === cat);
         return opts.length
-          ? `<optgroup label="${group}">${opts.map((p) => `<option value="${p.id}">${esc(p.label)}</option>`).join("")}</optgroup>`
+          ? `<optgroup label="${group}">${opts.map((p) =>
+              `<option value="${p.id}"${p.available ? "" : " disabled"}>${esc(p.label)}${p.available ? "" : " (unavailable)"}</option>`).join("")}</optgroup>`
           : "";
       }).join("") +
       `<option value="">Don't touch ${kind === "image" ? "images" : kind + " files"}</option>`;
     const saved = store.get(`preset-${kind}`);
-    if (saved !== null && [...sel.options].some((o) => o.value === saved)) sel.value = saved;
+    if (saved !== null && [...sel.options].some((o) => o.value === saved && !o.disabled)) sel.value = saved;
     sel.addEventListener("change", () => { store.set(`preset-${kind}`, sel.value); updateKind(kind); });
 
     const slider = $(`#${kind}-quality`);
@@ -77,6 +79,14 @@ function setupSettings() {
     });
     updateKind(kind);
   }
+
+  const gpu = config.hardware;
+  $("#hw-note").textContent = gpu.available
+    ? `GPU encoding ready (${gpu.encoders.map((e) => e.replace("_vaapi", "")).join(", ")}).`
+    : `GPU encoding unavailable: ${gpu.reason}`;
+  $("#resume-note").textContent = config.auto_resume
+    ? "The queue is saved: if the app or container restarts, unfinished files start again automatically (a file that was halfway through restarts from 0%)."
+    : "";
 
   const mh = $("#max-height");
   mh.innerHTML = `<option value="">Keep original</option>` +

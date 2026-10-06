@@ -6,15 +6,19 @@ everything except the video stream (audio tracks, subtitles, chapters,
 metadata) is stream-copied, so it stays bit-for-bit identical — even with the
 lossy presets.
 
-Presets come in three categories:
+Presets come in four categories:
   lossless  - decoded output is bit-for-bit / pixel-for-pixel identical
   visual    - technically lossy, but tuned so you can't tell the difference
   lossy     - noticeably smaller files, quality loss may be visible/audible
+  hardware  - lossy, encoded on the Intel GPU: very fast, but bigger files than
+              the software encoders at the same quality
 """
 
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable
+
+from .hw import HW
 
 VIDEO_EXTS = {".mp4", ".mkv", ".mov", ".avi", ".wmv", ".flv", ".webm", ".m4v", ".mpg", ".mpeg", ".ts", ".mts", ".m2ts", ".3gp"}
 LOSSLESS_AUDIO_EXTS = {".wav", ".aif", ".aiff", ".flac", ".ape", ".wv"}
@@ -55,7 +59,7 @@ class Quality:
 class Preset:
     id: str
     kind: str
-    category: str  # lossless | visual | lossy
+    category: str  # lossless | visual | lossy | hardware
     label: str
     description: str
     # ffmpeg args after the input; "{q}" is replaced by the quality value
@@ -70,6 +74,17 @@ class Preset:
     # turns the UI value into what ffmpeg expects (e.g. 1–100 → JPEG's 31–2 scale)
     quality_to_ffmpeg: Callable[[int], int] | None = None
     scalable: bool = False  # offer the "max resolution" option
+    hw_encoder: str | None = None  # e.g. "hevc_vaapi" — needs the GPU (see hw.py)
+
+    @property
+    def available(self) -> bool:
+        return self.hw_encoder is None or HW.supports(self.hw_encoder)
+
+    @property
+    def unavailable_reason(self) -> str:
+        if self.available:
+            return ""
+        return HW.reason or f"{self.hw_encoder} isn't supported by this GPU"
 
     def output_ext(self, src: Path) -> str:
         ext = src.suffix.lower()
@@ -84,13 +99,22 @@ class Preset:
             "label": self.label, "description": self.description,
             "quality": asdict(self.quality) if self.quality else None,
             "scalable": self.scalable,
+            "hardware": self.hw_encoder is not None,
+            "available": self.available,
+            "unavailable_reason": self.unavailable_reason,
         }
+
+    def input_args(self) -> list[str]:
+        """Options that must come before -i (opening the GPU)."""
+        return HW.init_args() if self.hw_encoder else []
 
     def ffmpeg_args(self, dst: Path, quality: int | None, max_height: int | None) -> list[str]:
         q = self.quality.default if quality is None and self.quality else quality
         if q is not None and self.quality_to_ffmpeg:
             q = self.quality_to_ffmpeg(q)
         codec = [a.format(q=q) for a in self.codec_args]
+        if self.hw_encoder:
+            codec += HW.quality_args(self.hw_encoder, q)
 
         if self.kind != "video":
             return ["-map_metadata", "0", *codec]
@@ -103,14 +127,21 @@ class Preset:
             "-c", "copy",  # copy everything by default...
             *codec,        # ...then re-encode only the video
         ]
+        filters = []
         if self.scalable and max_height:
             # limit the SHORT side to max_height, keep aspect ratio, never upscale.
             # -2 = "whatever keeps the aspect ratio, rounded to an even number" (encoders need even sizes)
             h = int(max_height)
-            args += ["-vf", f"scale='if(gte(iw,ih),-2,min(iw,{h}))':'if(gte(iw,ih),min(ih,{h}),-2)'"]
+            filters.append(f"scale='if(gte(iw,ih),-2,min(iw,{h}))':'if(gte(iw,ih),min(ih,{h}),-2)'")
+        if self.hw_encoder:
+            # decode + scale on the CPU (works for every source format and rotation),
+            # then hand 8-bit frames to the GPU, which only does the encoding
+            filters += ["format=nv12", "hwupload"]
+        if filters:
+            args += ["-vf", ",".join(filters)]
         if dst.suffix in (".mp4", ".m4v", ".mov"):
             args += ["-movflags", "+faststart"]
-            if "libx265" in self.codec_args:
+            if "libx265" in self.codec_args or self.hw_encoder == "hevc_vaapi":
                 args += ["-tag:v", "hvc1"]  # makes HEVC playable on Apple devices
         return args
 
@@ -171,6 +202,28 @@ PRESETS: dict[str, Preset] = {
             containers=MP4ISH,
             quality=Quality("CRF", 16, 35, 23, higher_is_better=False, hint=CRF_HINT + " 20–24 looks good, 28+ gets visibly soft."),
             scalable=True,
+        ),
+        Preset(
+            id="hevc_gpu", kind="video", category="hardware",
+            label="H.265 / HEVC — Intel GPU (fast)",
+            description="Encodes on the Intel iGPU (Quick Sync): many times faster than software and barely loads the CPU, but files are bigger than 'H.265 — small' at the same quality. 10-bit sources are converted to 8-bit; HDR sources are skipped (use a software preset for those).",
+            codec_args=["-c:v", "hevc_vaapi", "-profile:v", "main"],
+            containers=MP4ISH,
+            quality=Quality("Quality (QP)", 14, 40, 24, higher_is_better=False,
+                            hint=CRF_HINT + " 20–24 looks good, 28+ gets visibly soft. Needs a few points lower than the software CRF for similar quality."),
+            scalable=True,
+            hw_encoder="hevc_vaapi",
+        ),
+        Preset(
+            id="h264_gpu", kind="video", category="hardware",
+            label="H.264 — Intel GPU (fast)",
+            description="Encodes on the Intel iGPU: very fast and plays everywhere, but the biggest files of all the video presets. 10-bit sources are converted to 8-bit; HDR sources are skipped.",
+            codec_args=["-c:v", "h264_vaapi", "-profile:v", "high"],
+            containers=MP4ISH,
+            quality=Quality("Quality (QP)", 14, 40, 22, higher_is_better=False,
+                            hint=CRF_HINT + " 18–23 looks good, 28+ gets visibly soft."),
+            scalable=True,
+            hw_encoder="h264_vaapi",
         ),
         # ---------------- audio ----------------
         Preset(

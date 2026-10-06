@@ -10,5 +10,7 @@ services:
       - ./media/output:/output     # compressed files land here, same folder structure
     environment:
       - CONCURRENCY=1              # files encoded in parallel; x265/AV1 already use all cores
+    # devices:                     # uncomment to enable the "Intel GPU" presets (needs /dev/dri on the host)
+    #   - /dev/dri:/dev/dri
     # user: "1000:1000"            # uncomment so output files are owned by your user instead of root
     restart: unless-stopped

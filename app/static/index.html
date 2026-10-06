@@ -17,24 +17,39 @@
       <h2>1. Settings</h2>
       <div class="settings">
         <div class="setting">
-          <label for="video-preset">Video</label>
-          <select id="video-preset" data-kind="video"></select>
+          <label for="video-preset">Video <span class="cat-badge" id="video-cat"></span></label>
+          <select id="video-preset"></select>
           <p class="hint" id="video-hint"></p>
-          <div id="crf-row" class="crf-row">
-            <label for="crf">Quality (CRF) <strong id="crf-value"></strong></label>
-            <input type="range" id="crf" min="14" max="34" step="1">
-            <p class="hint">Lower = higher quality &amp; bigger file. The default is visually lossless for most content.</p>
+          <div id="video-quality-row" class="sub-row">
+            <label for="video-quality"><span id="video-quality-label"></span> <strong id="video-quality-value"></strong></label>
+            <input type="range" id="video-quality" step="1">
+            <p class="hint" id="video-quality-hint"></p>
+          </div>
+          <div id="video-scale-row" class="sub-row">
+            <label for="max-height">Max resolution</label>
+            <select id="max-height"></select>
+            <p class="hint">Downscales bigger videos (never upscales). Applies to the short side, so portrait videos work too.</p>
           </div>
         </div>
         <div class="setting">
-          <label for="audio-preset">Audio</label>
-          <select id="audio-preset" data-kind="audio"></select>
+          <label for="audio-preset">Audio <span class="cat-badge" id="audio-cat"></span></label>
+          <select id="audio-preset"></select>
           <p class="hint" id="audio-hint"></p>
+          <div id="audio-quality-row" class="sub-row">
+            <label for="audio-quality"><span id="audio-quality-label"></span> <strong id="audio-quality-value"></strong></label>
+            <input type="range" id="audio-quality" step="1">
+            <p class="hint" id="audio-quality-hint"></p>
+          </div>
         </div>
         <div class="setting">
-          <label for="image-preset">Images</label>
-          <select id="image-preset" data-kind="image"></select>
+          <label for="image-preset">Images <span class="cat-badge" id="image-cat"></span></label>
+          <select id="image-preset"></select>
           <p class="hint" id="image-hint"></p>
+          <div id="image-quality-row" class="sub-row">
+            <label for="image-quality"><span id="image-quality-label"></span> <strong id="image-quality-value"></strong></label>
+            <input type="range" id="image-quality" step="1">
+            <p class="hint" id="image-quality-hint"></p>
+          </div>
         </div>
       </div>
       <label class="check"><input type="checkbox" id="skip-existing" checked> Skip files that already exist in the output folder</label>

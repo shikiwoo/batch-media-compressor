@@ -24,7 +24,8 @@ class Job:
     src: str  # path relative to INPUT_DIR
     dst: str  # path relative to OUTPUT_DIR
     preset: str
-    crf: int | None
+    quality: int | None
+    max_height: int | None
     status: str = "queued"  # queued | running | done | kept_original | skipped | failed | cancelled
     progress: float = 0.0
     speed: str = ""
@@ -68,15 +69,20 @@ class JobManager:
 
     # ---- public API -------------------------------------------------------
 
-    def add(self, src_rel: str, preset_id: str, crf: int | None, skip_existing: bool) -> Job:
+    def add(self, src_rel: str, preset_id: str, quality: int | None, max_height: int | None,
+            skip_existing: bool) -> Job:
         preset = PRESETS[preset_id]
         src = Path(src_rel)
         dst = src.with_suffix(preset.output_ext(src))
-        job = Job(id=next(self._ids), src=src_rel, dst=str(dst), preset=preset_id, crf=crf)
+        job = Job(id=next(self._ids), src=src_rel, dst=str(dst), preset=preset_id,
+                  quality=quality, max_height=max_height)
         job.in_size = (self.input_dir / src).stat().st_size
         self.jobs[job.id] = job
 
-        if any(j.src == src_rel and j.status in ACTIVE for j in self.jobs.values() if j is not job):
+        if not preset.accepts(src):
+            self._finish(job, "skipped", f"{preset.label} doesn't apply to {src.suffix} files "
+                                         "(re-encoding an already-lossy file losslessly only makes it bigger)")
+        elif any(j.src == src_rel and j.status in ACTIVE for j in self.jobs.values() if j is not job):
             self._finish(job, "skipped", "Already in the queue")
         elif skip_existing and (self.output_dir / dst).exists():
             job.out_size = (self.output_dir / dst).stat().st_size
@@ -154,7 +160,7 @@ class JobManager:
             "ffmpeg", "-hide_banner", "-nostdin", "-y",
             "-loglevel", "error", "-nostats", "-progress", "pipe:1",
             "-i", str(src),
-            *preset.ffmpeg_args(src, dst, job.crf),
+            *preset.ffmpeg_args(dst, job.quality, job.max_height),
             str(tmp),
         ]
         proc = await asyncio.create_subprocess_exec(

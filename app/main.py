@@ -5,10 +5,10 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from .jobs import JobManager
-from .presets import PRESETS, kind_of, presets_for
+from .presets import MAX_HEIGHTS, PRESETS, kind_of, presets_for
 
 INPUT_DIR = Path(os.environ.get("INPUT_DIR", "/input")).resolve()
 OUTPUT_DIR = Path(os.environ.get("OUTPUT_DIR", "/output")).resolve()
@@ -43,16 +43,8 @@ def config():
         "input_dir": str(INPUT_DIR),
         "output_dir": str(OUTPUT_DIR),
         "concurrency": CONCURRENCY,
-        "presets": {
-            kind: [
-                {
-                    "id": p.id, "label": p.label, "description": p.description,
-                    "lossless": p.lossless, "uses_crf": p.uses_crf, "default_crf": p.default_crf,
-                }
-                for p in presets_for(kind)
-            ]
-            for kind in ("video", "audio", "image")
-        },
+        "presets": {kind: [p.public() for p in presets_for(kind)] for kind in ("video", "audio", "image")},
+        "max_heights": MAX_HEIGHTS,
     }
 
 
@@ -81,16 +73,28 @@ class StartRequest(BaseModel):
     video_preset: str | None = None
     audio_preset: str | None = None
     image_preset: str | None = None
-    crf: int | None = Field(default=None, ge=0, le=51)
+    # quality per kind (CRF / kbps / 1–100); None = the preset's default
+    video_quality: int | None = None
+    audio_quality: int | None = None
+    image_quality: int | None = None
+    max_height: int | None = None  # only used by presets with scalable=True
     skip_existing: bool = True
 
 
 @app.post("/api/jobs")
 def start_jobs(req: StartRequest):
     chosen = {"video": req.video_preset, "audio": req.audio_preset, "image": req.image_preset}
+    qualities = {"video": req.video_quality, "audio": req.audio_quality, "image": req.image_quality}
     for kind, pid in chosen.items():
-        if pid and (pid not in PRESETS or PRESETS[pid].kind != kind):
+        if not pid:
+            continue
+        if pid not in PRESETS or PRESETS[pid].kind != kind:
             raise HTTPException(400, f"Unknown {kind} preset: {pid}")
+        q, spec = qualities[kind], PRESETS[pid].quality
+        if q is not None and spec and not spec.min <= q <= spec.max:
+            raise HTTPException(400, f"{kind} {spec.label} must be between {spec.min} and {spec.max}")
+    if req.max_height is not None and req.max_height not in MAX_HEIGHTS:
+        raise HTTPException(400, f"max_height must be one of {MAX_HEIGHTS}")
 
     added = 0
     for rel in req.files:
@@ -98,8 +102,12 @@ def start_jobs(req: StartRequest):
         pid = chosen.get(kind_of(path))
         if not pid:
             continue
-        crf = req.crf if PRESETS[pid].uses_crf else None
-        manager.add(str(path.relative_to(INPUT_DIR)), pid, crf, req.skip_existing)
+        preset = PRESETS[pid]
+        quality = None
+        if preset.quality:
+            quality = qualities[preset.kind] if qualities[preset.kind] is not None else preset.quality.default
+        max_height = req.max_height if preset.scalable else None
+        manager.add(str(path.relative_to(INPUT_DIR)), pid, quality, max_height, req.skip_existing)
         added += 1
     return {"added": added}
 

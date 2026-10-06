@@ -7,7 +7,8 @@ A small web app that batch-compresses videos, audio and images with **ffmpeg**, 
 ```sh
 mkdir -p media/input media/output
 # put your files (folders are fine) in media/input
-docker compose up -d --build
+docker compose pull && docker compose up -d   # use the prebuilt image from GHCR
+# or: docker compose up -d --build            # build it locally instead
 ```
 
 Then open http://localhost:8080:
@@ -21,12 +22,21 @@ Compressed files go to `media/output` with the same folder structure. Your origi
 Without compose:
 
 ```sh
-docker build -t batch-media-compressor .
 docker run -d -p 8080:8080 \
   -v /path/to/originals:/input:ro \
   -v /path/to/compressed:/output \
-  batch-media-compressor
+  ghcr.io/shikiwoo/batch-media-compressor:latest
 ```
+
+### Prebuilt images
+
+GitHub Actions (`.github/workflows/docker.yml`) builds the image for `linux/amd64` and `linux/arm64` and pushes it to GHCR:
+
+| Event | Tags pushed |
+|---|---|
+| Push to `main` | `latest`, `sha-<commit>` |
+| Push a tag `v1.2.0` | `1.2.0`, `1.2`, `sha-<commit>` |
+| Pull request | builds only, nothing pushed |
 
 ## Presets
 

@@ -1,6 +1,7 @@
 services:
   compressor:
-    build: .
+    image: ghcr.io/shikiwoo/batch-media-compressor:latest  # prebuilt by GitHub Actions
+    build: .                                               # used by `docker compose up --build`
     container_name: batch-media-compressor
     ports:
       - "8080:8080"

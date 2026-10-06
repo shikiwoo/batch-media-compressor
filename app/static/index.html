@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Batch Media Compressor</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <h1>Batch Media Compressor</h1>
+    <p class="dirs">Input <code id="input-dir">…</code> → Output <code id="output-dir">…</code></p>
+  </header>
+
+  <main>
+    <section class="card">
+      <h2>1. Settings</h2>
+      <div class="settings">
+        <div class="setting">
+          <label for="video-preset">Video</label>
+          <select id="video-preset" data-kind="video"></select>
+          <p class="hint" id="video-hint"></p>
+          <div id="crf-row" class="crf-row">
+            <label for="crf">Quality (CRF) <strong id="crf-value"></strong></label>
+            <input type="range" id="crf" min="14" max="34" step="1">
+            <p class="hint">Lower = higher quality &amp; bigger file. The default is visually lossless for most content.</p>
+          </div>
+        </div>
+        <div class="setting">
+          <label for="audio-preset">Audio</label>
+          <select id="audio-preset" data-kind="audio"></select>
+          <p class="hint" id="audio-hint"></p>
+        </div>
+        <div class="setting">
+          <label for="image-preset">Images</label>
+          <select id="image-preset" data-kind="image"></select>
+          <p class="hint" id="image-hint"></p>
+        </div>
+      </div>
+      <label class="check"><input type="checkbox" id="skip-existing" checked> Skip files that already exist in the output folder</label>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>2. Pick files</h2>
+        <button id="refresh" class="ghost">Rescan</button>
+      </div>
+      <div class="toolbar">
+        <input type="search" id="filter" placeholder="Filter by name…">
+        <select id="kind-filter">
+          <option value="">All types</option>
+          <option value="video">Video</option>
+          <option value="audio">Audio</option>
+          <option value="image">Images</option>
+        </select>
+      </div>
+      <div class="table-wrap files-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th class="w-check"><input type="checkbox" id="select-all" title="Select all visible"></th>
+              <th>File</th>
+              <th class="w-kind">Type</th>
+              <th class="num">Size</th>
+            </tr>
+          </thead>
+          <tbody id="files"></tbody>
+        </table>
+        <p id="files-empty" class="empty" hidden>No supported media files found in the input folder.</p>
+      </div>
+      <div class="actions">
+        <span id="selection-info">0 selected</span>
+        <button id="start" class="primary" disabled>Compress selected</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>3. Progress</h2>
+        <div class="btn-row">
+          <button id="cancel-all" class="ghost danger">Cancel all</button>
+          <button id="clear" class="ghost">Clear finished</button>
+        </div>
+      </div>
+      <div class="overall">
+        <div class="bar big"><div id="overall-bar"></div></div>
+        <div class="stats" id="stats"></div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>File</th>
+              <th class="w-status">Status</th>
+              <th class="w-progress">Progress</th>
+              <th class="num">Before → After</th>
+              <th class="w-check"></th>
+            </tr>
+          </thead>
+          <tbody id="jobs"></tbody>
+        </table>
+        <p id="jobs-empty" class="empty">Nothing queued yet.</p>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

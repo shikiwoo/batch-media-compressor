@@ -1,0 +1,13 @@
+services:
+  compressor:
+    build: .
+    container_name: batch-media-compressor
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./media/input:/input:ro    # originals, mounted read-only so they can never be touched
+      - ./media/output:/output     # compressed files land here, same folder structure
+    environment:
+      - CONCURRENCY=1              # files encoded in parallel; x265/AV1 already use all cores
+    # user: "1000:1000"            # uncomment so output files are owned by your user instead of root
+    restart: unless-stopped

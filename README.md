@@ -1,5 +1,7 @@
 # Batch Media Compressor
 
+I was fed up with overly complex utilities for batch processing on headless systems, and wanted a resumable utility for compressing large batches of videos with ffmpeg. A shell script didn't really cut it, so I built this. Obv vibe coded cause I can't code whether it's life or death. 
+
 A small web app that batch-compresses videos, audio and images with **ffmpeg**, either without visible quality loss or, if you want, lossy for much smaller files. It runs as a Docker container and shows live progress for each file, with speed and ETA.
 
 ## Quick start
